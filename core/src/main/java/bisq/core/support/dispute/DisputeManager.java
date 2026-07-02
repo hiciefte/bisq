@@ -415,18 +415,33 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
             return;
         }
 
+        // Integrity checks: a mismatch here means the payload was tampered with or replayed. The opener
+        // is already authenticated, so a genuine dispute cannot fail these. Fail closed and drop silently
+        // (log only, no UI popup): the payload is attacker-controlled, so surfacing rejects as dialogs would be
+        // a popup-flood vector and would point at a case that was never stored.
         try {
             DisputeValidation.validateDisputeData(dispute, btcWalletService);
+            DisputeValidation.testIfDisputeTriesReplay(dispute, disputeList.getList());
+        } catch (DisputeValidation.ValidationException e) {
+            log.warn("Rejecting {} for trade {}: {}",
+                    openNewDisputeMessage.getClass().getSimpleName(), dispute.getTradeId(), e.toString());
+            return;
+        }
+
+        // Advisory checks: a legitimate dispute can trip these (e.g. donation-address param drift, node address
+        // formatting). We must NOT drop the case, or the trader is stuck with no way to get mediation. Instead we
+        // store and forward it as usual and alert the agent via validationExceptions (popup) so they can resolve
+        // it manually, matching pre-1.10.3 behavior and the sibling peerOpenedDisputeForTrade handler.
+        try {
             DisputeValidation.validateNodeAddresses(dispute, config);
             DisputeValidation.validateSenderNodeAddress(dispute, openNewDisputeMessage.getSenderNodeAddress());
-            DisputeValidation.testIfDisputeTriesReplay(dispute, disputeList.getList());
             if (dispute.isUsingLegacyBurningMan()) {
                 DisputeValidation.validateDonationAddressMatchesAnyPastParamValues(dispute, dispute.getDonationAddressOfDelayedPayoutTx(), daoFacade);
             }
         } catch (DisputeValidation.ValidationException e) {
-            log.error(e.toString());
+            log.warn("Advisory validation failed for {} on trade {}: {}",
+                    openNewDisputeMessage.getClass().getSimpleName(), dispute.getTradeId(), e.toString());
             validationExceptions.add(e);
-            return;
         }
 
         Contract contract = dispute.getContract();

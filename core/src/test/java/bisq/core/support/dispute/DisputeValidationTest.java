@@ -118,6 +118,65 @@ class DisputeValidationTest {
                 () -> DisputeValidation.validateDisputeData(dispute, mock(BtcWalletService.class), POST_ACTIVATION_NOW));
     }
 
+    @Test
+    void replayCheckAcceptsFirstDisputeNotYetInList() {
+        // Regression: the fail-closed ingest path validates before the dispute is added to the list. The replay
+        // check must still count the dispute under test, otherwise the first legitimate dispute for a trade is
+        // rejected with a misleading "more then 2 disputes" error, breaking mediation.
+        Dispute dispute = replayDispute("uid-1");
+
+        assertDoesNotThrow(() -> DisputeValidation.testIfDisputeTriesReplay(dispute, List.of()));
+    }
+
+    @Test
+    void replayCheckAcceptsSecondDisputeForSameTrade() {
+        Dispute stored = replayDispute("uid-1");
+        Dispute incoming = replayDispute("uid-2");
+
+        assertDoesNotThrow(() -> DisputeValidation.testIfDisputeTriesReplay(incoming, List.of(stored)));
+    }
+
+    @Test
+    void replayCheckRejectsThirdDisputeForSameTrade() {
+        Dispute stored1 = replayDispute("uid-1");
+        Dispute stored2 = replayDispute("uid-2");
+        Dispute incoming = replayDispute("uid-3");
+
+        assertThrows(DisputeValidation.DisputeReplayException.class,
+                () -> DisputeValidation.testIfDisputeTriesReplay(incoming, List.of(stored1, stored2)));
+    }
+
+    private static Dispute replayDispute(String uid) {
+        PubKeyRing buyerPubKeyRing = pubKeyRing();
+        PubKeyRing sellerPubKeyRing = pubKeyRing();
+        PubKeyRing mediatorPubKeyRing = pubKeyRing();
+        Contract contract = contract(buyerPubKeyRing, sellerPubKeyRing, mediatorPubKeyRing, pubKeyRing());
+        String contractAsJson = JsonUtil.objectToJson(contract);
+        Dispute dispute = new Dispute(
+                0,
+                TRADE_ID,
+                TRADER_ID,
+                true,
+                true,
+                buyerPubKeyRing,
+                POST_ACTIVATION_TRADE_DATE,
+                0,
+                contract,
+                Hash.getSha256Hash(contractAsJson),
+                null,
+                null,
+                "depositTxId",
+                null,
+                contractAsJson,
+                null,
+                null,
+                mediatorPubKeyRing,
+                false,
+                SupportType.MEDIATION);
+        dispute.setUid(uid);
+        return dispute;
+    }
+
     private static Dispute dispute(PubKeyRing traderPubKeyRing,
                                    PubKeyRing agentPubKeyRing,
                                    Contract contract,
