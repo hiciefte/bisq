@@ -21,7 +21,10 @@ import bisq.core.btc.setup.WalletsSetup;
 import bisq.core.btc.wallet.BtcWalletService;
 import bisq.core.btc.wallet.TradeWalletService;
 import bisq.core.dao.DaoFacade;
+import bisq.core.locale.Res;
+import bisq.core.offer.OfferDirection;
 import bisq.core.offer.OpenOfferManager;
+import bisq.core.offer.bisq_v1.OfferPayload;
 import bisq.core.payment.payload.PaymentMethod;
 import bisq.core.provider.price.PriceFeedService;
 import bisq.core.support.SupportType;
@@ -40,8 +43,11 @@ import bisq.network.p2p.NodeAddress;
 import bisq.network.p2p.P2PService;
 import bisq.network.p2p.mailbox.MailboxMessageService;
 
+import bisq.core.util.JsonUtil;
+
 import bisq.common.config.Config;
 import bisq.common.crypto.Encryption;
+import bisq.common.crypto.Hash;
 import bisq.common.crypto.KeyRing;
 import bisq.common.crypto.KeyStorage;
 import bisq.common.crypto.PubKeyRing;
@@ -84,6 +90,8 @@ class DisputeManagerAuthTest {
 
     @BeforeEach
     void setUp() {
+        Res.setup();
+
         tradeManager = mock(TradeManager.class);
         closedTradableManager = mock(ClosedTradableManager.class);
         failedTradesManager = mock(FailedTradesManager.class);
@@ -180,7 +188,10 @@ class DisputeManagerAuthTest {
     }
 
     @Test
-    void openNewDisputeWithInvalidContractDataDoesNotMutateDisputeList() {
+    void openNewDisputeWithForgedContractDataIsDroppedSilently() {
+        // Integrity/forgery failure (invalid contractAsJson/hash): the payload was tampered with. Fail closed -
+        // do not store the dispute, and do NOT surface a UI popup (validationExceptions), since the payload is
+        // attacker-controlled and popups would be a flood vector pointing at a case that was never stored.
         TestDisputeList disputeList = new TestDisputeList();
         DisputeListService<DisputeList<Dispute>> disputeListService = disputeListService(disputeList);
         TestDisputeManager manager = new TestDisputeManager(mockP2PService(),
@@ -205,8 +216,38 @@ class DisputeManagerAuthTest {
         manager.onOpenNewDispute(message, buyerPubKeyRing.getSignaturePubKey());
 
         assertTrue(disputeList.isEmpty());
-        assertFalse(manager.getValidationExceptions().isEmpty());
+        assertTrue(manager.getValidationExceptions().isEmpty());
         verify(disputeListService, never()).requestPersistence();
+    }
+
+    @Test
+    void openNewDisputeWithAdvisoryValidationFailureIsStoredAndPopsUpForAgent() {
+        // Advisory failure on an otherwise valid, integrity-checked dispute (here: node addresses that are not
+        // valid onion addresses). A legitimate dispute can trip these, so we must NOT drop it: store and forward
+        // it as usual and alert the agent via validationExceptions (popup) so the case can be resolved manually.
+        TestDisputeList disputeList = new TestDisputeList();
+        DisputeListService<DisputeList<Dispute>> disputeListService = disputeListService(disputeList);
+        TestDisputeManager manager = new TestDisputeManager(mockP2PService(),
+                tradeManager,
+                closedTradableManager,
+                failedTradesManager,
+                keyStorageDir,
+                disputeListService);
+
+        PubKeyRing buyerPubKeyRing = pubKeyRing();
+        PubKeyRing sellerPubKeyRing = pubKeyRing();
+        // Local node is the dispute agent so the dispute is actually processed (added + forwarded).
+        Dispute dispute = validDispute(buyerPubKeyRing, sellerPubKeyRing, manager.agentPubKeyRing());
+        OpenNewDisputeMessage message = new OpenNewDisputeMessage(dispute,
+                PEER_NODE_ADDRESS,
+                "open-dispute-uid",
+                SupportType.MEDIATION);
+
+        manager.onOpenNewDispute(message, buyerPubKeyRing.getSignaturePubKey());
+
+        assertTrue(disputeList.getList().contains(dispute));
+        assertFalse(manager.getValidationExceptions().isEmpty());
+        verify(disputeListService).requestPersistence();
     }
 
     @Test
@@ -304,6 +345,110 @@ class DisputeManagerAuthTest {
                 0);
     }
 
+    // A dispute that passes integrity validation (contract json/hash, agent pubkey) but trips an advisory check:
+    // the trader node addresses are not valid onion addresses, so validateNodeAddresses fails softly.
+    private static Dispute validDispute(PubKeyRing buyerPubKeyRing,
+                                        PubKeyRing sellerPubKeyRing,
+                                        PubKeyRing agentPubKeyRing) {
+        Contract contract = validContract(buyerPubKeyRing, sellerPubKeyRing, agentPubKeyRing);
+        String contractAsJson = JsonUtil.objectToJson(contract);
+        return new Dispute(
+                0,
+                TRADE_ID,
+                0,
+                true,
+                true,
+                buyerPubKeyRing,
+                0,
+                0,
+                contract,
+                Hash.getSha256Hash(contractAsJson),
+                null,
+                null,
+                "depositTxId",
+                null,
+                contractAsJson,
+                null,
+                null,
+                agentPubKeyRing,
+                false,
+                SupportType.MEDIATION);
+    }
+
+    private static Contract validContract(PubKeyRing buyerPubKeyRing,
+                                          PubKeyRing sellerPubKeyRing,
+                                          PubKeyRing mediatorPubKeyRing) {
+        return new Contract(
+                offerPayload(buyerPubKeyRing),
+                50_000_000L,
+                1_000_000L,
+                "takerFeeTxId",
+                new NodeAddress("buyer.onion", 9999),
+                new NodeAddress("seller.onion", 9999),
+                PEER_NODE_ADDRESS,
+                true,
+                "makerAccountId",
+                "takerAccountId",
+                null,
+                null,
+                buyerPubKeyRing,
+                sellerPubKeyRing,
+                "makerPayoutAddress",
+                "takerPayoutAddress",
+                new byte[33],
+                new byte[33],
+                0,
+                PEER_NODE_ADDRESS,
+                null,
+                null,
+                PaymentMethod.SEPA_ID,
+                PaymentMethod.SEPA_ID,
+                0,
+                mediatorPubKeyRing,
+                pubKeyRing());
+    }
+
+    private static OfferPayload offerPayload(PubKeyRing makerPubKeyRing) {
+        return new OfferPayload(TRADE_ID,
+                1_700_000_000_000L,
+                PEER_NODE_ADDRESS,
+                makerPubKeyRing,
+                OfferDirection.SELL,
+                50_000_000L,
+                0,
+                false,
+                1_000_000L,
+                1_000_000L,
+                "BTC",
+                "EUR",
+                List.of(),
+                List.of(PEER_NODE_ADDRESS),
+                PaymentMethod.SEPA_ID,
+                "makerPaymentAccountId",
+                "offerFeePaymentTxId",
+                null,
+                null,
+                null,
+                null,
+                "1.9.9",
+                123_456L,
+                1_000L,
+                2_000L,
+                true,
+                3_000L,
+                4_000L,
+                5_000L,
+                6_000L,
+                false,
+                false,
+                0,
+                0,
+                false,
+                null,
+                null,
+                4);
+    }
+
     private static PubKeyRing pubKeyRing() {
         return new PubKeyRing(Sig.generateKeyPair().getPublic(),
                 Encryption.generateKeyPair().getPublic());
@@ -367,6 +512,10 @@ class DisputeManagerAuthTest {
                                               PublicKey senderSignaturePubKey,
                                               String messageClassName) {
             return isDisputeAgentSignaturePubKeyValid(dispute, senderSignaturePubKey, messageClassName);
+        }
+
+        private PubKeyRing agentPubKeyRing() {
+            return pubKeyRing;
         }
 
         private void onOpenNewDispute(OpenNewDisputeMessage openNewDisputeMessage,
