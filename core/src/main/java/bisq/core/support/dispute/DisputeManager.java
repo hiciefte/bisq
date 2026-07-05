@@ -546,6 +546,13 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
             return;
         }
 
+        if (!agentSignatureAlreadyChecked && !isDisputeAgentSignaturePubKeyValid(dispute,
+                trade,
+                senderSignaturePubKey,
+                peerOpenedDisputeMessage.getClass().getSimpleName())) {
+            return;
+        }
+
         try {
             DisputeValidation.validateDisputeData(dispute, btcWalletService);
             DisputeValidation.validateNodeAddresses(dispute, config);
