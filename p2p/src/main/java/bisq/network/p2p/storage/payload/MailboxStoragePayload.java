@@ -125,7 +125,7 @@ public final class MailboxStoragePayload implements ProtectedStoragePayload, Exp
         if (proto.getExtraDataMap().size() > 1) {
             // We do not throw an exception as we might add more entries in the future.
             // In that case, the size check can be removed, but we need to ensure that all users have updated
-            // to v1.10.2 or higher.
+            // to v1.10.3 or higher.
             log.warn("ExtraDataMap in MailboxStoragePayload had more then 1 map entry. " +
                     "This is not expected.");
         }
