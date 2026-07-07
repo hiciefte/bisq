@@ -17,7 +17,6 @@
 
 package bisq.desktop.main.overlays.windows;
 
-import bisq.core.alert.AlertManager;
 import bisq.desktop.components.AutoTooltipButton;
 import bisq.desktop.components.InputTextField;
 import bisq.desktop.main.overlays.Overlay;
@@ -25,6 +24,7 @@ import bisq.desktop.main.overlays.popups.Popup;
 import bisq.desktop.util.FormBuilder;
 
 import bisq.core.alert.Alert;
+import bisq.core.alert.AlertManager;
 import bisq.core.locale.Res;
 
 import bisq.common.app.DevEnv;
@@ -48,6 +48,8 @@ import javafx.scene.layout.HBox;
 
 import javafx.geometry.HPos;
 import javafx.geometry.Insets;
+
+import java.util.function.Function;
 
 import static bisq.desktop.util.FormBuilder.addInputTextField;
 import static bisq.desktop.util.FormBuilder.addLabelCheckBox;
@@ -160,16 +162,13 @@ public class SendAlertMessageWindow extends Overlay<SendAlertMessageWindow> {
             }
         });
 
-        Button removeAlertMessageButton = new AutoTooltipButton(Res.get("sendAlertMessageWindow.remove"));
-        removeAlertMessageButton.setDisable(!alertManager.hasDevelopersAlert());
-        removeAlertMessageButton.setOnAction(e -> {
-            if (keyInputTextField.getText().length() > 0) {
-                if (alertManager.removeAlertMessageIfKeyIsValid(keyInputTextField.getText()))
-                    hide();
-                else
-                    new Popup().warning(Res.get("shared.invalidKey")).width(300).onClose(this::blurAgain).show();
-            }
-        });
+        Button removeAllAlertsButton = new AutoTooltipButton(Res.get("sendAlertMessageWindow.removeAll"));
+        removeAllAlertsButton.setDisable(!alertManager.hasAnyAlert());
+        removeAllAlertsButton.setOnAction(e -> removeAlert(keyInputTextField, alertManager::removeAllAlerts));
+
+        Button removeDeveloperAlertButton = new AutoTooltipButton(Res.get("sendAlertMessageWindow.remove"));
+        removeDeveloperAlertButton.setDisable(!alertManager.hasDevelopersAlert());
+        removeDeveloperAlertButton.setOnAction(e -> removeAlert(keyInputTextField, alertManager::removeDeveloperAlert));
 
         closeButton = new AutoTooltipButton(Res.get("shared.close"));
         closeButton.setOnAction(e -> {
@@ -180,8 +179,17 @@ public class SendAlertMessageWindow extends Overlay<SendAlertMessageWindow> {
         HBox hBox = new HBox();
         hBox.setSpacing(10);
         GridPane.setRowIndex(hBox, ++rowIndex);
-        hBox.getChildren().addAll(sendButton, removeAlertMessageButton, closeButton);
+        hBox.getChildren().addAll(sendButton, removeAllAlertsButton, removeDeveloperAlertButton, closeButton);
         gridPane.getChildren().add(hBox);
         GridPane.setMargin(hBox, new Insets(10, 0, 0, 0));
+    }
+
+    private void removeAlert(InputTextField keyInputTextField, Function<String, Boolean> removeAlert) {
+        String privKeyString = keyInputTextField.getText();
+        if (!privKeyString.isEmpty() && removeAlert.apply(privKeyString)) {
+            hide();
+        } else {
+            new Popup().warning(Res.get("shared.invalidKey")).width(300).onClose(this::blurAgain).show();
+        }
     }
 }

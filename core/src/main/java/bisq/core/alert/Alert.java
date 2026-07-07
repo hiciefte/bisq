@@ -30,6 +30,7 @@ import bisq.common.encoding.canonical.TreeMapIterator;
 import bisq.common.proto.network.GetDataResponsePriority;
 import bisq.common.util.CollectionUtils;
 import bisq.common.util.ExtraDataMapValidator;
+import bisq.common.util.Hex;
 
 import com.google.protobuf.ByteString;
 
@@ -43,7 +44,6 @@ import java.util.concurrent.TimeUnit;
 
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
-import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import org.jetbrains.annotations.VisibleForTesting;
@@ -54,7 +54,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 @EqualsAndHashCode
 @Getter
-@ToString
 @Slf4j
 public final class Alert implements ProtectedStoragePayload, ExpirablePayload {
     public static final long TTL = TimeUnit.DAYS.toMillis(90);
@@ -257,5 +256,18 @@ public final class Alert implements ProtectedStoragePayload, ExpirablePayload {
 
     public String showAgainKey() {
         return "Update_" + version;
+    }
+
+    @Override
+    public String toString() {
+        return "Alert{" +
+                "message='" + message + '\'' +
+                ", isUpdateInfo=" + isUpdateInfo +
+                ", isPreReleaseInfo=" + isPreReleaseInfo +
+                ", version='" + version + '\'' +
+                ", ownerPubKeyAsHex=" + (ownerPubKeyBytes == null ? "null" : Hex.encode(ownerPubKeyBytes)) +
+                ", signatureAsBase64='" + signatureAsBase64 + '\'' +
+                ", extraDataMap=" + extraDataMap +
+                '}';
     }
 }

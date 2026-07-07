@@ -19,6 +19,7 @@ package bisq.core.app;
 
 import bisq.core.account.sign.SignedWitnessService;
 import bisq.core.account.witness.AccountAgeWitnessService;
+import bisq.core.alert.AlertManager;
 import bisq.core.alert.PrivateNotificationManager;
 import bisq.core.alert.PrivateNotificationPayload;
 import bisq.core.btc.Balances;
@@ -96,6 +97,7 @@ public class DomainInitialisation {
     private final ArbitratorManager arbitratorManager;
     private final MediatorManager mediatorManager;
     private final RefundAgentManager refundAgentManager;
+    private final AlertManager alertManager;
     private final PrivateNotificationManager privateNotificationManager;
     private final P2PService p2PService;
     private final FeeService feeService;
@@ -138,6 +140,7 @@ public class DomainInitialisation {
                                 ArbitratorManager arbitratorManager,
                                 MediatorManager mediatorManager,
                                 RefundAgentManager refundAgentManager,
+                                AlertManager alertManager,
                                 PrivateNotificationManager privateNotificationManager,
                                 P2PService p2PService,
                                 FeeService feeService,
@@ -178,6 +181,7 @@ public class DomainInitialisation {
         this.arbitratorManager = arbitratorManager;
         this.mediatorManager = mediatorManager;
         this.refundAgentManager = refundAgentManager;
+        this.alertManager = alertManager;
         this.privateNotificationManager = privateNotificationManager;
         this.p2PService = p2PService;
         this.feeService = feeService;
@@ -249,6 +253,7 @@ public class DomainInitialisation {
         });
 
         p2PService.onAllServicesInitialized();
+        alertManager.onAllServicesInitialized();
 
         feeService.onAllServicesInitialized(filterPolicyService);
 
