@@ -42,6 +42,8 @@ import bisq.network.p2p.NodeAddress;
 import bisq.common.handlers.ErrorMessageHandler;
 import bisq.common.handlers.ResultHandler;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -50,6 +52,22 @@ public abstract class BuyerProtocol extends DisputeProtocol {
         STARTUP,
         PAYMENT_SENT
     }
+
+    // States at which STARTUP re-runs BuyerSendCounterCurrencyTransferStartedMessage.
+    // BUYER_SENT_FIAT_PAYMENT_INITIATED_MSG is included because it means we have not
+    // received the seller's AckMessage yet. The in-memory resend timer of
+    // BuyerSendCounterCurrencyTransferStartedMessage does not survive a restart, so
+    // without re-running the task here a restart before the ACK arrives would leave
+    // the trade without any resend attempts (buyer stuck at "Please send confirmation
+    // again", seller never learns the payment was started).
+    // Shared with BuyerStartupResendConditionTest so the regression test exercises
+    // the same state list production uses.
+    @VisibleForTesting
+    public static final Trade.State[] STARTUP_RESEND_PAYMENT_STARTED_STATES = {
+            Trade.State.BUYER_SENT_FIAT_PAYMENT_INITIATED_MSG,
+            Trade.State.BUYER_STORED_IN_MAILBOX_FIAT_PAYMENT_INITIATED_MSG,
+            Trade.State.BUYER_SEND_FAILED_FIAT_PAYMENT_INITIATED_MSG
+    };
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Constructor
@@ -75,8 +93,7 @@ public abstract class BuyerProtocol extends DisputeProtocol {
                 .executeTasks();
 
         given(anyPhase(Trade.Phase.FIAT_SENT, Trade.Phase.FIAT_RECEIVED)
-                .anyState(Trade.State.BUYER_STORED_IN_MAILBOX_FIAT_PAYMENT_INITIATED_MSG,
-                        Trade.State.BUYER_SEND_FAILED_FIAT_PAYMENT_INITIATED_MSG)
+                .anyState(STARTUP_RESEND_PAYMENT_STARTED_STATES)
                 .with(BuyerEvent.STARTUP))
                 .setup(tasks(BuyerSendCounterCurrencyTransferStartedMessage.class))
                 .executeTasks();

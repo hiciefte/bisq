@@ -135,6 +135,15 @@ public class BuyerSendCounterCurrencyTransferStartedMessage extends SendMailboxM
         try {
             runInterceptHook();
 
+            // The peer's ACK can be processed while no task instance is listening (e.g. it
+            // arrived after a restart, before this task got re-created at startup). In that
+            // case the persisted message state is already ACKNOWLEDGED and we only apply the
+            // state transition the ACK would have triggered instead of sending again.
+            if (processModel.getPaymentStartedMessageStateProperty().get() == MessageState.ACKNOWLEDGED) {
+                onMessageStateChange(MessageState.ACKNOWLEDGED);
+                return;
+            }
+
             super.run();
         } catch (Throwable t) {
             failed(t);
