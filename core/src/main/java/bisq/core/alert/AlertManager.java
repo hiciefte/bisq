@@ -41,11 +41,14 @@ import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
-import java.security.SignatureException;
-
 import java.math.BigInteger;
 
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +62,9 @@ public class AlertManager {
     private final KeyRing keyRing;
     private final User user;
     private final ObjectProperty<Alert> alertMessageProperty = new SimpleObjectProperty<>();
+    private final Map<Alert, Long> addedAlerts = new HashMap<>();
+    private final boolean ignoreDevMsg;
+    private long alertMessageCreationTimeStamp = Long.MIN_VALUE;
 
     // Pub key for developer global alert message
     private final String pubKeyAsHex;
@@ -67,6 +73,7 @@ public class AlertManager {
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Constructor, Initialization
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     @Inject
@@ -84,11 +91,9 @@ public class AlertManager {
                 @Override
                 public void onAdded(Collection<ProtectedStorageEntry> protectedStorageEntries) {
                     protectedStorageEntries.forEach(protectedStorageEntry -> {
-                        final ProtectedStoragePayload protectedStoragePayload = protectedStorageEntry.getProtectedStoragePayload();
-                        if (protectedStoragePayload instanceof Alert) {
-                            Alert alert = (Alert) protectedStoragePayload;
-                            if (verifySignature(alert))
-                                alertMessageProperty.set(alert);
+                        ProtectedStoragePayload protectedStoragePayload = protectedStorageEntry.getProtectedStoragePayload();
+                        if (protectedStoragePayload instanceof Alert alert) {
+                            onAlertAdded(protectedStorageEntry);
                         }
                     });
                 }
@@ -96,15 +101,15 @@ public class AlertManager {
                 @Override
                 public void onRemoved(Collection<ProtectedStorageEntry> protectedStorageEntries) {
                     protectedStorageEntries.forEach(protectedStorageEntry -> {
-                        final ProtectedStoragePayload protectedStoragePayload = protectedStorageEntry.getProtectedStoragePayload();
-                        if (protectedStoragePayload instanceof Alert) {
-                            if (verifySignature((Alert) protectedStoragePayload))
-                                alertMessageProperty.set(null);
+                        ProtectedStoragePayload protectedStoragePayload = protectedStorageEntry.getProtectedStoragePayload();
+                        if (protectedStoragePayload instanceof Alert alert) {
+                            onAlertRemoved(alert);
                         }
                     });
                 }
             });
         }
+        this.ignoreDevMsg = ignoreDevMsg;
         pubKeyAsHex = useDevPrivilegeKeys ?
                 DevEnv.getDEV_PRIVILEGE_PUB_KEY() :
                 "036d8a1dfcb406886037d2381da006358722823e1940acc2598c844bbc0fd1026f";
@@ -113,16 +118,29 @@ public class AlertManager {
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // API
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public ReadOnlyObjectProperty<Alert> alertMessageProperty() {
         return alertMessageProperty;
     }
 
+    public void onAllServicesInitialized() {
+        if (ignoreDevMsg) {
+            return;
+        }
+
+
+        p2PService.getDataMap().values().stream()
+                .filter(entry -> entry.getProtectedStoragePayload() instanceof Alert)
+                .sorted(Comparator.comparingLong(ProtectedStorageEntry::getCreationTimeStamp))
+                .forEach(this::onAlertAdded);
+    }
+
     public boolean addAlertMessageIfKeyIsValid(Alert alert, String privKeyString) {
         // if there is a previous message we remove that first
         if (user.getDevelopersAlert() != null)
-            removeAlertMessageIfKeyIsValid(privKeyString);
+            removeDeveloperAlert(privKeyString);
 
         boolean isKeyValid = isKeyValid(privKeyString);
         if (isKeyValid) {
@@ -141,17 +159,93 @@ public class AlertManager {
         return user.getDevelopersAlert() != null;
     }
 
-    public boolean removeAlertMessageIfKeyIsValid(String privKeyString) {
-        Alert alert = user.getDevelopersAlert();
-        if (isKeyValid(privKeyString) && alert != null) {
-            if (p2PService.removeData(alert))
-                log.trace("Remove alertMessage from network was successful. AlertMessage={}", alert);
+    public boolean hasAnyAlert() {
+        return !addedAlerts.isEmpty() || hasDevelopersAlert();
+    }
 
-            user.setDevelopersAlert(null);
-            return true;
-        } else {
+    public boolean removeDeveloperAlert(String privKeyString) {
+        if (!isKeyValid(privKeyString)) {
             return false;
         }
+
+        Alert developersAlert = user.getDevelopersAlert();
+        if (developersAlert != null) {
+            user.setDevelopersAlert(null);
+            removeAlert(developersAlert);
+            return true;
+        }
+
+        return false;
+    }
+
+    public boolean removeAllAlerts(String privKeyString) {
+        if (!isKeyValid(privKeyString)) {
+            return false;
+        }
+
+        Set<Alert> alertsToRemove = new HashSet<>(addedAlerts.keySet());
+        Alert developersAlert = user.getDevelopersAlert();
+        if (developersAlert != null) {
+            user.setDevelopersAlert(null);
+            alertsToRemove.add(developersAlert);
+        }
+        alertsToRemove.forEach(this::removeAlert);
+        return true;
+    }
+
+    private void removeAlert(Alert alert) {
+        if (alert != null) {
+            if (p2PService.removeData(alert)) {
+                log.info("Remove alert from network was successful. Alert={}", alert);
+            } else {
+                log.warn("Removing alert failed. alert={}", alert);
+            }
+        }
+    }
+
+    private void onAlertAdded(ProtectedStorageEntry protectedStorageEntry) {
+        ProtectedStoragePayload protectedStoragePayload = protectedStorageEntry.getProtectedStoragePayload();
+        if (protectedStoragePayload instanceof Alert alert) {
+            if (verifySignature(alert)) {
+                long creationTimeStamp = protectedStorageEntry.getCreationTimeStamp();
+                log.info("Alert added: {}, creationTimeStamp={}", alert, creationTimeStamp);
+                Long previousCreationTimeStamp = addedAlerts.get(alert);
+                if (previousCreationTimeStamp == null || creationTimeStamp > previousCreationTimeStamp) {
+                    addedAlerts.put(alert, creationTimeStamp);
+                }
+
+                if (creationTimeStamp > alertMessageCreationTimeStamp) {
+                    setAlertMessage(alert, creationTimeStamp);
+                }
+            } else {
+                log.warn("Signature verification failed at adding alert {}", alert);
+            }
+        }
+    }
+
+    private void onAlertRemoved(Alert alert) {
+        if (verifySignature(alert)) {
+            log.info("Alert removed: {}", alert);
+            addedAlerts.remove(alert);
+            if (alert.equals(alertMessageProperty.get())) {
+                setNewestAlertMessage();
+            }
+        } else {
+            log.warn("Signature verification failed at removing alert {}", alert);
+        }
+    }
+
+    private void setNewestAlertMessage() {
+        addedAlerts.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .ifPresentOrElse(
+                        entry -> setAlertMessage(entry.getKey(), entry.getValue()),
+                        () -> setAlertMessage(null, Long.MIN_VALUE));
+    }
+
+    private void setAlertMessage(Alert alert, long creationTimeStamp) {
+        alertMessageProperty.set(alert);
+        alertMessageCreationTimeStamp = creationTimeStamp;
     }
 
     private boolean isKeyValid(String privKeyString) {
@@ -170,12 +264,12 @@ public class AlertManager {
     }
 
     private boolean verifySignature(Alert alert) {
-        String alertMessageAsHex = Utils.HEX.encode(alert.getMessage().getBytes(Charsets.UTF_8));
         try {
+            String alertMessageAsHex = Utils.HEX.encode(alert.getMessage().getBytes(Charsets.UTF_8));
             ECKey.fromPublicOnly(HEX.decode(pubKeyAsHex)).verifyMessage(alertMessageAsHex, alert.getSignatureAsBase64());
             return true;
-        } catch (SignatureException e) {
-            log.warn("verifySignature failed");
+        } catch (Exception e) {
+            log.warn("verifySignature failed. alert={}", alert);
             return false;
         }
     }
