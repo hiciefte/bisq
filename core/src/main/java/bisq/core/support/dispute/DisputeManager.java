@@ -434,7 +434,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
         // it manually, matching pre-1.10.3 behavior and the sibling peerOpenedDisputeForTrade handler.
         try {
             DisputeValidation.validateNodeAddresses(dispute, config);
-            DisputeValidation.validateSenderNodeAddress(dispute, openNewDisputeMessage.getSenderNodeAddress());
+            DisputeValidation.validateDisputeOpenerIsTrader(dispute, openNewDisputeMessage.getSenderNodeAddress());
             if (dispute.isUsingLegacyBurningMan()) {
                 DisputeValidation.validateDonationAddressMatchesAnyPastParamValues(dispute, dispute.getDonationAddressOfDelayedPayoutTx(), daoFacade);
             }
