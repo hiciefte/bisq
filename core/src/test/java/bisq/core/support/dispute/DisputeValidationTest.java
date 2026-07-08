@@ -121,8 +121,8 @@ class DisputeValidationTest {
     @Test
     void replayCheckAcceptsFirstDisputeNotYetInList() {
         // Regression: the fail-closed ingest path validates before the dispute is added to the list. The replay
-        // check must still count the dispute under test, otherwise the first legitimate dispute for a trade is
-        // rejected with a misleading "more then 2 disputes" error, breaking mediation.
+        // check must interpret the stored count together with the dispute under test, otherwise the first legitimate
+        // dispute for a trade is rejected with a misleading "more then 2 disputes" error, breaking mediation.
         Dispute dispute = replayDispute("uid-1");
 
         assertDoesNotThrow(() -> DisputeValidation.testIfDisputeTriesReplay(dispute, List.of()));
@@ -134,6 +134,13 @@ class DisputeValidationTest {
         Dispute incoming = replayDispute("uid-2");
 
         assertDoesNotThrow(() -> DisputeValidation.testIfDisputeTriesReplay(incoming, List.of(stored)));
+    }
+
+    @Test
+    void replayCheckAcceptsDisputeAlreadyInList() {
+        Dispute dispute = replayDispute("uid-1");
+
+        assertDoesNotThrow(() -> DisputeValidation.testIfDisputeTriesReplay(dispute, List.of(dispute)));
     }
 
     @Test
