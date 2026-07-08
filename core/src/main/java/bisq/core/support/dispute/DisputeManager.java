@@ -85,6 +85,7 @@ import lombok.extern.slf4j.Slf4j;
 import javax.annotation.Nullable;
 
 import static bisq.core.trade.validation.DelayedPayoutTxValidation.checkDelayedPayoutTx;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 @Slf4j
@@ -111,6 +112,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Constructor
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public DisputeManager(P2PService p2PService,
@@ -146,6 +148,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Implement template methods
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     @Override
@@ -205,10 +208,12 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Abstract methods
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     // We get that message at both peers. The dispute object is in context of the trader
-    public abstract void onDisputeResultMessage(DisputeResultMessage disputeResultMessage, PublicKey senderSignaturePubKey);
+    public abstract void onDisputeResultMessage(DisputeResultMessage disputeResultMessage,
+                                                PublicKey senderSignaturePubKey);
 
     @Nullable
     public abstract NodeAddress getAgentNodeAddress(Dispute dispute);
@@ -229,6 +234,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Delegates for disputeListService
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public IntegerProperty getNumOpenDisputes() {
@@ -253,6 +259,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // API
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public void onAllServicesInitialized() {
@@ -369,6 +376,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Message handler
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public boolean agentCheckDisputeHealth(Dispute disputeToCheck) {
@@ -390,7 +398,8 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
     }
 
     // dispute agent receives that from trader who opens dispute
-    protected void onOpenNewDisputeMessage(OpenNewDisputeMessage openNewDisputeMessage, PublicKey senderSignaturePubKey) {
+    protected void onOpenNewDisputeMessage(OpenNewDisputeMessage openNewDisputeMessage,
+                                           PublicKey senderSignaturePubKey) {
         T disputeList = getDisputeList();
         if (disputeList == null) {
             log.warn("disputes is null");
@@ -404,44 +413,35 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
             return;
         }
 
-        // Disputes from clients < 1.2.0 always have support type ARBITRATION in dispute as the field didn't exist before
-        dispute.setSupportType(openNewDisputeMessage.getSupportType());
-        // disputes from clients < 1.6.0 have state not set as the field didn't exist before
-        dispute.setState(Dispute.State.NEW);    // this can be removed a few months after 1.6.0 release
-
-        if (!isDisputeOpenerSignaturePubKeyValid(dispute,
-                senderSignaturePubKey,
-                openNewDisputeMessage.getClass().getSimpleName())) {
-            return;
-        }
-
-        // Integrity checks: a mismatch here means the payload was tampered with or replayed. The opener
-        // is already authenticated, so a genuine dispute cannot fail these. Fail closed and drop silently
-        // (log only, no UI popup): the payload is attacker-controlled, so surfacing rejects as dialogs would be
-        // a popup-flood vector and would point at a case that was never stored.
         try {
+            checkArgument(dispute.getSupportType() == openNewDisputeMessage.getSupportType(),
+                    "Support type of dispute must match openNewDisputeMessage.getSupportType()");
+            checkArgument(dispute.getDisputeState() == Dispute.State.NEW,
+                    "Support state of dispute must be NEW at opening dispute");
+
+            checkArgument(isDisputeOpenerSignaturePubKeyValid(dispute,
+                            senderSignaturePubKey,
+                            openNewDisputeMessage.getClass().getSimpleName()),
+                    "Signature validation failed");
+
             DisputeValidation.validateDisputeData(dispute, btcWalletService);
-            DisputeValidation.testIfDisputeTriesReplay(dispute, disputeList.getList());
-        } catch (DisputeValidation.ValidationException e) {
-            log.warn("Rejecting {} for trade {}: {}",
-                    openNewDisputeMessage.getClass().getSimpleName(), dispute.getTradeId(), e.toString());
-            return;
-        }
-
-        // Advisory checks: a legitimate dispute can trip these (e.g. donation-address param drift, node address
-        // formatting). We must NOT drop the case, or the trader is stuck with no way to get mediation. Instead we
-        // store and forward it as usual and alert the agent via validationExceptions (popup) so they can resolve
-        // it manually, matching pre-1.10.3 behavior and the sibling peerOpenedDisputeForTrade handler.
-        try {
             DisputeValidation.validateNodeAddresses(dispute, config);
             DisputeValidation.validateDisputeOpenerIsTrader(dispute, openNewDisputeMessage.getSenderNodeAddress());
+            DisputeValidation.testIfDisputeTriesReplay(dispute, disputeList.getList());
+
+            // Normally we do not expect legacy burning man as fee receiver anymore, but in some edge cases we can stil
+            // fall back to that, thus we keep that check.
             if (dispute.isUsingLegacyBurningMan()) {
                 DisputeValidation.validateDonationAddressMatchesAnyPastParamValues(dispute, dispute.getDonationAddressOfDelayedPayoutTx(), daoFacade);
             }
+        } catch (IllegalArgumentException e) {
+            log.error("Validating dispute failed", e);
+            validationExceptions.add(new DisputeValidation.ValidationException(dispute, e.getMessage()));
+            return;
         } catch (DisputeValidation.ValidationException e) {
-            log.warn("Advisory validation failed for {} on trade {}: {}",
-                    openNewDisputeMessage.getClass().getSimpleName(), dispute.getTradeId(), e.toString());
+            log.error("Validating dispute failed", e);
             validationExceptions.add(e);
+            return;
         }
 
         Contract contract = dispute.getContract();
@@ -481,16 +481,17 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
     }
 
     // Not-dispute-requester receives that msg from dispute agent
-    protected void onPeerOpenedDisputeMessage(PeerOpenedDisputeMessage peerOpenedDisputeMessage, PublicKey senderSignaturePubKey) {
+    protected void onPeerOpenedDisputeMessage(PeerOpenedDisputeMessage peerOpenedDisputeMessage,
+                                              PublicKey senderSignaturePubKey) {
         Dispute dispute = peerOpenedDisputeMessage.getDispute();
         tradeManager.getTradeById(dispute.getTradeId()).ifPresentOrElse(
-            trade -> peerOpenedDisputeForTrade(peerOpenedDisputeMessage, dispute, trade, senderSignaturePubKey, false),
-            () -> closedTradableManager.getTradableById(dispute.getTradeId()).ifPresentOrElse(
-                closedTradable -> newDisputeRevertsClosedTrade(peerOpenedDisputeMessage, dispute, (Trade)closedTradable, senderSignaturePubKey),
-                () -> failedTradesManager.getTradeById(dispute.getTradeId()).ifPresentOrElse(
-                    trade -> newDisputeRevertsFailedTrade(peerOpenedDisputeMessage, dispute, trade, senderSignaturePubKey),
-                    () -> log.warn("Dropping {} for trade {}: no local trade, closed tradable, or failed trade found.",
-                            peerOpenedDisputeMessage.getClass().getSimpleName(), dispute.getTradeId()))));
+                trade -> peerOpenedDisputeForTrade(peerOpenedDisputeMessage, dispute, trade, senderSignaturePubKey, false),
+                () -> closedTradableManager.getTradableById(dispute.getTradeId()).ifPresentOrElse(
+                        closedTradable -> newDisputeRevertsClosedTrade(peerOpenedDisputeMessage, dispute, (Trade) closedTradable, senderSignaturePubKey),
+                        () -> failedTradesManager.getTradeById(dispute.getTradeId()).ifPresentOrElse(
+                                trade -> newDisputeRevertsFailedTrade(peerOpenedDisputeMessage, dispute, trade, senderSignaturePubKey),
+                                () -> log.warn("Dropping {} for trade {}: no local trade, closed tradable, or failed trade found.",
+                                        peerOpenedDisputeMessage.getClass().getSimpleName(), dispute.getTradeId()))));
     }
 
     private void newDisputeRevertsFailedTrade(PeerOpenedDisputeMessage peerOpenedDisputeMessage,
@@ -616,6 +617,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Send message
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     public void sendOpenNewDisputeMessage(Dispute dispute,
@@ -975,6 +977,7 @@ public abstract class DisputeManager<T extends DisputeList<Dispute>> extends Sup
 
     ///////////////////////////////////////////////////////////////////////////////////////////
     // Utils
+
     ///////////////////////////////////////////////////////////////////////////////////////////
 
     private Tuple2<NodeAddress, PubKeyRing> getNodeAddressPubKeyRingTuple(Dispute dispute) {

@@ -39,6 +39,7 @@ import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionOutput;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
@@ -244,18 +245,12 @@ public class DisputeValidation {
 
     public static void testIfDisputeTriesReplay(Dispute dispute,
                                                 List<Dispute> disputeList) throws DisputeReplayException {
-        var tuple = getTestReplayHashMaps(disputeList);
+        List<Dispute> disputeListIncludingDisputeToTest = new ArrayList<>(disputeList);
+        disputeListIncludingDisputeToTest.add(dispute);
+        var tuple = getTestReplayHashMaps(disputeListIncludingDisputeToTest);
         Map<String, Set<String>> disputesPerTradeId = tuple.first;
         Map<String, Set<String>> disputesPerDelayedPayoutTxId = tuple.second;
         Map<String, Set<String>> disputesPerDepositTxId = tuple.third;
-
-        // Include the dispute under test in the counters. Callers may validate before the dispute has been added
-        // to the list (fail-closed ingest path); the counters are keyed by uid, so re-adding an already stored
-        // dispute is idempotent and the <= 2 disputes-per-trade limit holds regardless of call order.
-        String uid = dispute.getUid();
-        addUid(disputesPerTradeId, dispute.getTradeId(), uid);
-        addUid(disputesPerDelayedPayoutTxId, dispute.getDelayedPayoutTxId(), uid);
-        addUid(disputesPerDepositTxId, dispute.getDepositTxId(), uid);
 
         testIfDisputeTriesReplay(dispute,
                 disputesPerTradeId,
@@ -292,13 +287,6 @@ public class DisputeValidation {
         });
 
         return new Tuple3<>(disputesPerTradeId, disputesPerDelayedPayoutTxId, disputesPerDepositTxId);
-    }
-
-    private static void addUid(Map<String, Set<String>> disputesPerKey, @Nullable String key, String uid) {
-        if (key == null) {
-            return;
-        }
-        disputesPerKey.computeIfAbsent(key, k -> new HashSet<>()).add(uid);
     }
 
     private static void testIfDisputeTriesReplay(Dispute disputeToTest,
@@ -376,6 +364,12 @@ public class DisputeValidation {
 
     public static class AddressException extends ValidationException {
         AddressException(Dispute dispute, String msg) {
+            super(dispute, msg);
+        }
+    }
+
+    public static class SignatureException extends ValidationException {
+        SignatureException(Dispute dispute, String msg) {
             super(dispute, msg);
         }
     }
