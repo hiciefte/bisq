@@ -1092,6 +1092,7 @@ def installerArtifactsIn = { File installerDir ->
     installerDir.directory
             ? fileTree(installerDir) {
                 installerArtifactIncludes.each { include it }
+                exclude '**/jpackage_temp/**'
             }.files
                     .findAll { it.isFile() }
                     .sort { left, right -> left.path <=> right.path }
@@ -2067,7 +2068,7 @@ tasks.register('generateInstallerManifest') {
     description = 'Builds desktop OS installer artifacts and writes canonical SHA-256 installer manifests.'
 
     def desktopGenerateInstallers = project(':desktop').tasks.named('generateInstallers')
-    def desktopInstallerDir = project(':desktop').layout.buildDirectory.dir('packaging/jpackage/packages')
+    def desktopInstallerDir = project(':desktop').layout.buildDirectory.dir('packaging')
 
     dependsOn tasks.named('verifyReleaseEnvironment')
     dependsOn desktopGenerateInstallers
@@ -2138,7 +2139,7 @@ tasks.register('generateInstallerStructureReport') {
     group = 'verification'
     description = 'Writes investigation reports for installer package internals where local tools are available.'
 
-    def desktopInstallerDir = project(':desktop').layout.buildDirectory.dir('packaging/jpackage/packages')
+    def desktopInstallerDir = project(':desktop').layout.buildDirectory.dir('packaging')
 
     dependsOn tasks.named('generateInstallerManifest')
 
